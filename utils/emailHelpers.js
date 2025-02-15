@@ -4,8 +4,8 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   host: 'smtp.gmail.com',
   auth: {
-    user: process.env.SEND_MAIL_GMAIL_ACCOUNT,
-    pass: process.env.SEND_MAIL_GMAIL_ACCOUNT_PASSWORD,
+    user: process.env.GMAIL_ACCOUNT,
+    pass: process.env.GMAIL_PASSWORD,
   },
 });
 
@@ -13,7 +13,7 @@ const transporter = nodemailer.createTransport({
 const sendEmail = async (to, subject, html) => {
   try {
     const info = await transporter.sendMail({
-      from: `Task management Tool <${process.env.SEND_MAIL_GMAIL_ACCOUNT}>`,
+      from: `Task management Tool <${process.env.GMAIL_ACCOUNT}>`,
       to,
       subject,
       html,
