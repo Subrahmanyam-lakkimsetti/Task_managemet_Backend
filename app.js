@@ -11,6 +11,11 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cookieparser = require('cookie-parser');
 const Task = require('./models/taskModel');
+const cron = require('node-cron');
+
+cron.schedule('* * * * *', () => {
+  console.log('running a task every minute');
+});
 
 const PORT = process.env.PORT || 2005;
 
@@ -20,7 +25,7 @@ app.use(morgan('dev'));
 app.use(
   cors({
     credentials: true,
-    origin: 'http://localhost:5173',
+    origin: 'http://localhost:5174',
   })
 );
 
@@ -54,7 +59,8 @@ app.get('/users', async (req, res) => {
 
 app.post('/users/register', async (req, res) => {
   try {
-    const { email, password, otp } = req.body;
+    const { email, password, otp, fullName } = req.body;
+    console.log(fullName);
 
     const otpDoc = await OTP.findOne({
       email: email,
@@ -87,11 +93,15 @@ app.post('/users/register', async (req, res) => {
     const newUser = await User.create({
       email,
       password: hashedPassword,
+      fullName,
     });
 
     res.status(200).json({
       status: 'success',
-      email: newUser.email,
+      data: {
+        email: newUser.email,
+        fullname: newUser.fullName,
+      },
     });
   } catch (error) {
     console.log('error in post: ', error);
@@ -116,7 +126,7 @@ app.post('/users/register', async (req, res) => {
 
 app.post('/users/login', async (req, res) => {
   try {
-    const { email, password, _id, fullName } = req.body;
+    const { email, password } = req.body;
 
     if (!email || !password) {
       res.status(400).json({
@@ -133,7 +143,7 @@ app.post('/users/login', async (req, res) => {
       return;
     }
 
-    const { password: hashedPassword } = currUser;
+    const { password: hashedPassword, _id, fullName } = currUser;
     const ispasswordCorrect = await bcrypt.compare(password, hashedPassword);
     if (!ispasswordCorrect) {
       res.status(401).json({
@@ -171,6 +181,7 @@ app.post('/users/login', async (req, res) => {
       data: {
         user: {
           email,
+          fullName,
         },
       },
     });
@@ -185,46 +196,63 @@ app.post('/users/login', async (req, res) => {
 
 // request handler to send the otp
 app.post('/otps', async (req, res) => {
-  const { email } = req.query;
-  console.log(email);
+  try {
+    const { email } = req.body;
+    console.log(email);
 
-  //
-  if (!email) {
-    res.status(400).json({
-      status: 'failure',
-      message: 'email is missing in the parameter',
+    //
+    if (!email) {
+      res.status(400).json({
+        status: 'failure',
+        message: 'email is missing in the parameter',
+      });
+      return;
+    }
+
+    // create otp, store it in DB, send the sucess response
+
+    const otp = GenerateOtp();
+    const isEmailSent = await sendOtpEmail(email, otp);
+    // console.log(isEmailSent);
+
+    if (!isEmailSent) {
+      res.status(500).json({
+        ststus: 'failure',
+        message: 'Email could not send',
+      });
+      return;
+    }
+
+    console.log(otp);
+
+    const newSalt = await bcrypt.genSalt(14); // rounds x (iterations pow(2^x))
+    const hashedotp = await bcrypt.hash(otp.toString(), newSalt);
+
+    await OTP.create({
+      email,
+      otp: hashedotp,
     });
-    return;
-  }
 
-  // create otp, store it in DB, send the sucess response
-
-  const otp = GenerateOtp();
-  const isEmailSent = await sendOtpEmail(email, otp);
-  // console.log(isEmailSent);
-
-  if (!isEmailSent) {
-    res.status(500).json({
-      ststus: 'failure',
-      message: 'Email could not send',
+    res.status(201).json({
+      status: 'success',
+      message: `OTP send to ${email}`,
     });
-    return;
+  } catch {
+    console.log(error.message);
   }
+});
 
-  console.log(otp);
-
-  const newSalt = await bcrypt.genSalt(14); // rounds x (iterations pow(2^x))
-  const hashedotp = await bcrypt.hash(otp.toString(), newSalt);
-
-  await OTP.create({
-    email,
-    otp: hashedotp,
-  });
-
-  res.status(201).json({
-    status: 'success',
-    message: `OTP send to ${email}`,
-  });
+app.get('/users/logout', (req, res) => {
+  try {
+    console.log(req.cookies);
+    res.clearCookie('authorization');
+    res.json({
+      status: 'success',
+      message: 'logout sucessfully',
+    });
+  } catch (error) {
+    console.log(error.message);
+  }
 });
 
 app.use(cookieparser());
@@ -234,6 +262,7 @@ app.use((req, res, next) => {
   // --> get the token from cookies
 
   const { authorization } = req.cookies;
+  console.log(authorization);
 
   if (!authorization) {
     res.status(401).json({
@@ -247,7 +276,7 @@ app.use((req, res, next) => {
     if (error) {
       // token expires or not authorised
       res.status(401).json({
-        status: 'success',
+        status: 'error',
         message: 'Auth failed',
       });
       return;
@@ -287,6 +316,52 @@ app.post('/tasks', async (req, res) => {
         .status(500)
         .json({ status: 'fail', message: 'Internal Server Error' });
     }
+  }
+});
+
+app.get('/users/me', (req, res) => {
+  try {
+    const { email, fullName } = req.currUser;
+    res.status(200);
+    res.json({
+      status: 'success',
+      data: {
+        user: {
+          email,
+          fullName,
+        },
+      },
+    });
+  } catch (err) {
+    console.log('error is GET /users/me', err.message);
+    res.status(500);
+    res.json({
+      status: 'fail',
+      message: 'INTERNAL SERVER ERROR',
+    });
+  }
+});
+
+app.get('/tasks', async (req, res) => {
+  try {
+    const taskList = await Task.find().or([
+      { assignor: req.currUser.email },
+      { assignee: req.currUser.email },
+    ]);
+    res.status(200);
+    res.json({
+      status: 'success',
+      data: {
+        tasks: taskList,
+      },
+    });
+  } catch (err) {
+    console.log('error is GET /users/me', err.message);
+    res.status(500);
+    res.json({
+      status: 'fail',
+      message: 'INTERNAL SERVER ERROR',
+    });
   }
 });
 
